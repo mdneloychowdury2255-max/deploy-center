@@ -3106,16 +3106,7 @@
                 if (ext === 'html') {
                     hostPath = 'static/hosting/' + urlName + '/index.html';
                 } else if (ext === 'js') {
-                    const wrapperContent = btoa(unescape(encodeURIComponent('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>' + name + '</title></head><body><script src="app.js"><\/script>
-<script>
-/* skip the PA login gate on GitHub Pages (no PA backend here) */
-(function(){
-  var ls=document.getElementById('loginScreen'); if(ls){ ls.style.display='none'; }
-  var app=document.getElementById('app'); if(app){ app.style.display='flex'; app.classList.add('active'); }
-  var dv=document.querySelector('[data-view="deploy"]'); if(dv){ dv.click(); }
-})();
-</script>
-</body></html>')));
+                    const wrapperContent = btoa(unescape(encodeURIComponent('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>' + name + '</title></head><body><script src="app.js"><\/script></body></html>')));
                     await fetch(PA_BASE + '/api/pa/write', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -9109,6 +9100,15 @@ window.Deploy = (function () {
   return API;
 })();
 
+</script>
+
+<script>
+/* skip the PA login gate on GitHub Pages (no PA backend here) */
+(function(){
+  var ls=document.getElementById('loginScreen'); if(ls){ ls.style.display='none'; }
+  var app=document.getElementById('app'); if(app){ app.style.display='flex'; app.classList.add('active'); }
+  var dv=document.querySelector('[data-view="deploy"]'); if(dv){ dv.click(); }
+})();
 </script>
 </body>
 </html>
