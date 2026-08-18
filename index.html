@@ -9082,5 +9082,13 @@ window.Deploy = (function () {
 })();
 
 </script>
+<script>
+/* GitHub Pages build: skip the PA login gate, jump straight to Deploy Center */
+(function(){try{
+  var ls=document.getElementById('loginScreen'); if(ls) ls.style.display='none';
+  var app=document.getElementById('app'); if(app) app.style.display='flex';
+  var d=document.querySelector('[data-view="deploy"]'); if(d) d.click();
+}catch(e){console.warn('bypass failed',e);}})();
+</script>
 </body>
 </html>
