@@ -3106,7 +3106,16 @@
                 if (ext === 'html') {
                     hostPath = 'static/hosting/' + urlName + '/index.html';
                 } else if (ext === 'js') {
-                    const wrapperContent = btoa(unescape(encodeURIComponent('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>' + name + '</title></head><body><script src="app.js"><\/script></body></html>')));
+                    const wrapperContent = btoa(unescape(encodeURIComponent('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>' + name + '</title></head><body><script src="app.js"><\/script>
+<script>
+/* skip the PA login gate on GitHub Pages (no PA backend here) */
+(function(){
+  var ls=document.getElementById('loginScreen'); if(ls){ ls.style.display='none'; }
+  var app=document.getElementById('app'); if(app){ app.style.display='flex'; app.classList.add('active'); }
+  var dv=document.querySelector('[data-view="deploy"]'); if(dv){ dv.click(); }
+})();
+</script>
+</body></html>')));
                     await fetch(PA_BASE + '/api/pa/write', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -8609,7 +8618,7 @@ window.Deploy = (function () {
     '.deploy-diff{font-family:var(--font-mono,monospace);font-size:11px;white-space:pre;line-height:1.4;overflow:auto;padding:6px}' +
     '.deploy-diff .d{-background:rgba(248,113,113,.12);color:#fca5a5}' +
     '.deploy-diff .a{background:rgba(52,211,153,.12);color:#6ee7b7}' +
-    '.deploy-diff .u{color:var(--text-secondary)}';
+    '.deploy-diff .u{color:var(--text-secondary)}' + '.deploy-tb-group{display:flex;align-items:center;gap:5px;padding:4px 7px;border:1px solid var(--border-subtle);border-radius:9px;background:var(--bg-surface);flex:1 1 240px;min-width:0}.deploy-tb-group .badge-row{display:flex;align-items:center;gap:5px;flex:0 0 auto}.deploy-tb-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}.deploy-focus{display:flex;align-items:center;gap:2px;background:var(--bg-surface);border:1px solid var(--border-mid);border-radius:9px;padding:2px;flex:0 0 auto}.deploy-focus button{font-size:11px;padding:4px 9px;border:none;background:transparent;color:var(--text-secondary);border-radius:7px;cursor:pointer;white-space:nowrap}.deploy-focus button.active{background:linear-gradient(135deg,#5b6ef5,#8b5cf6);color:#fff}.deploy-shell.focus-gh .deploy-pane.pa{display:none}.deploy-shell.focus-gh .deploy-pane.gh{flex:1 1 100%!important}.deploy-shell.focus-pa .deploy-pane.gh{display:none}.deploy-shell.focus-pa .deploy-pane.pa{flex:1 1 100%!important}.deploy-shell.focus-split .deploy-pane.gh{flex:0 0 50%}.deploy-shell.focus-split .deploy-pane.pa{flex:1 1 0}.deploy-shell.focus-gh .deploy-divider,.deploy-shell.focus-pa .deploy-divider{display:none}';
   function injectCss() { if (el('deployCss')) return; var s = document.createElement('style'); s.id = 'deployCss'; s.textContent = CSS; (document.head || document.documentElement).appendChild(s); }
 
   function busy(side, on) {
@@ -8617,27 +8626,44 @@ window.Deploy = (function () {
     if (b) { b.disabled = on; b.textContent = on ? '⏳…' : '🔄 Reload'; }
   }
 
+  function setFocus(m) {
+    var p = el('panel-deploy'); if (!p) return;
+    var sh = p.querySelector('.deploy-shell'); if (!sh) return;
+    sh.classList.remove('focus-gh', 'focus-pa', 'focus-split');
+    sh.classList.add('focus-' + m);
+    qa('.deploy-focus button', sh).forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-f') === m);
+    });
+    ss('deploy_focus', m);
+  }
+
   /* ═══ Shell ═══ */
   var SHELL =
     '<div class="deploy-shell">' +
       '<div class="deploy-toolbar">' +
-        '<div class="deploy-tb-side">' +
-          '<span class="deploy-badge gh">⬡ GitHub</span><span class="deploy-dot" id="dGhDot" title="status"></span>' +
+        '<div class="deploy-tb-group">' +
+          '<span class="badge-row"><span class="deploy-badge gh">⬡ GitHub</span><span class="deploy-dot" id="dGhDot" title="status"></span></span>' +
           '<input id="dGhRepo" class="flex1" placeholder="owner/repo">' +
-          '<select id="dGhBranch" style="width:96px" title="branch"><option value="">branch…</option></select>' +
-          '<input id="dGhTok" style="width:80px" type="password" placeholder="GH token">' +
+          '<select id="dGhBranch" style="width:90px" title="branch"><option value="">branch…</option></select>' +
+          '<input id="dGhTok" style="width:88px" type="password" placeholder="GH token">' +
         '</div>' +
-        '<div class="deploy-divider-v"></div>' +
-        '<div class="deploy-tb-side">' +
-          '<span class="deploy-badge pa">🐍 PA Bot</span><span class="deploy-dot" id="dPaDot" title="status"></span>' +
+        '<div class="deploy-tb-group">' +
+          '<span class="badge-row"><span class="deploy-badge pa">🐍 PA</span><span class="deploy-dot" id="dPaDot" title="status"></span></span>' +
           '<input id="dPaUrl" class="flex1" placeholder="https://xxx.pythonanywhere.com">' +
           '<button class="deploy-btn" onclick="Deploy.restartBot()">♻️ Restart</button>' +
           '<button class="deploy-btn" onclick="Deploy.botTools()">🤖 Bot</button>' +
         '</div>' +
-        '<button class="deploy-btn" onclick="Deploy.syncModal()">🔗 Sync</button>' +
-        '<button class="deploy-btn" id="dAutoBtn" onclick="Deploy.toggleAuto()">⏱ Auto</button>' +
-        '<button class="deploy-btn" onclick="Deploy.settings()">⚙️</button>' +
-        '<button class="deploy-btn green" onclick="Deploy.syncBoth()">🔃 Sync Both</button>' +
+        '<div class="deploy-focus">' +
+          '<button data-f="split" class="active" onclick="Deploy.setFocus(\'split\')">⊞ Split</button>' +
+          '<button data-f="gh" onclick="Deploy.setFocus(\'gh\')">◧ GitHub</button>' +
+          '<button data-f="pa" onclick="Deploy.setFocus(\'pa\')">◨ PA</button>' +
+        '</div>' +
+        '<div class="deploy-tb-actions">' +
+          '<button class="deploy-btn" onclick="Deploy.syncModal()">🔗 Sync</button>' +
+          '<button class="deploy-btn" id="dAutoBtn" onclick="Deploy.toggleAuto()">⏱ Auto</button>' +
+          '<button class="deploy-btn" onclick="Deploy.settings()">⚙️</button>' +
+          '<button class="deploy-btn green" onclick="Deploy.syncBoth()">🔃 Sync Both</button>' +
+        '</div>' +
       '</div>' +
       '<div class="deploy-body">' +
         // ── GitHub pane ──
@@ -8755,6 +8781,8 @@ window.Deploy = (function () {
     var p = el('panel-deploy'); if (!p) return;
     if (!p.dataset.built) { p.innerHTML = SHELL; p.dataset.built = '1'; wireDivider(); wireKeys(); }
     el('dGhRepo').value = S.repo; el('dGhBranch').value = S.branch; el('dPaUrl').value = S.paUrl;
+    var f = ls('deploy_focus', ''); if (!f) f = (window.innerWidth < 760) ? 'gh' : 'split';
+    setFocus(f);
     el('dGhTok').value = S.ghTok ? '••••••••' : '';
     el('dGhRepo').onchange = function () { S.repo = this.value.trim(); S.ghTabs = []; S.ghActive = -1; S.ghCur = null; saveState(); reloadGH(); };
     el('dGhBranch').onchange = function () { S.branch = this.value; saveState(); reloadGH(); };
@@ -9081,14 +9109,6 @@ window.Deploy = (function () {
   return API;
 })();
 
-</script>
-<script>
-/* GitHub Pages build: skip the PA login gate, jump straight to Deploy Center */
-(function(){try{
-  var ls=document.getElementById('loginScreen'); if(ls) ls.style.display='none';
-  var app=document.getElementById('app'); if(app) app.style.display='flex';
-  var d=document.querySelector('[data-view="deploy"]'); if(d) d.click();
-}catch(e){console.warn('bypass failed',e);}})();
 </script>
 </body>
 </html>
