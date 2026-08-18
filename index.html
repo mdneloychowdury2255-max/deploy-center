@@ -8453,6 +8453,7 @@ window.Deploy = (function () {
   }
 
   /* ── State persistence ── */
+  function normRepo(r) { return (r || '').trim().replace(/\/+$/, '').replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, ''); }
   function loadState() {
     S.repo = ls('deploy_repo', ''); S.ghTok = ls('deploy_ghtoken', ''); S.branch = ls('deploy_branch', '');
     S.paUrl = ls('deploy_paurl', (window.PA_BASE || '')); S.paTok = ls('deploy_patoken', ls('pa_token', ''));
@@ -8475,29 +8476,29 @@ window.Deploy = (function () {
     var ct = r.headers.get('content-type') || '';
     return ct.indexOf('json') >= 0 ? await r.json() : await r.text();
   }
-  function ghRepoInfo() { return gh('/repos/' + encodeURIComponent(S.repo)); }
+  function ghRepoInfo() { return gh('/repos/' + S.repo); }
   function ghContents(path) {
-    var p = '/repos/' + encodeURIComponent(S.repo) + '/contents/' + (path || '').replace(/^\/+/, '');
+    var p = '/repos/' + S.repo + '/contents/' + (path || '').replace(/^\/+/, '');
     if (S.branch) p += '?ref=' + encodeURIComponent(S.branch);
     return gh(p);
   }
   function ghPutFile(path, content, sha, message) {
     var body = { message: message, content: utoa(content), branch: S.branch };
     if (sha) body.sha = sha;
-    return gh('/repos/' + encodeURIComponent(S.repo) + '/contents/' + path.replace(/^\/+/, ''), 'PUT', body);
+    return gh('/repos/' + S.repo + '/contents/' + path.replace(/^\/+/, ''), 'PUT', body);
   }
   function ghDelFile(path, sha, message) {
-    return gh('/repos/' + encodeURIComponent(S.repo) + '/contents/' + path.replace(/^\/+/, ''), 'DELETE', { message: message, sha: sha, branch: S.branch });
+    return gh('/repos/' + S.repo + '/contents/' + path.replace(/^\/+/, ''), 'DELETE', { message: message, sha: sha, branch: S.branch });
   }
-  function ghBranches() { return gh('/repos/' + encodeURIComponent(S.repo) + '/branches?per_page=100'); }
-  function ghCommits(path) { return gh('/repos/' + encodeURIComponent(S.repo) + '/commits?path=' + encodeURIComponent(path) + '&per_page=15'); }
-  function ghWorkflows() { return gh('/repos/' + encodeURIComponent(S.repo) + '/actions/workflows'); }
-  function ghRuns() { return gh('/repos/' + encodeURIComponent(S.repo) + '/actions/runs?per_page=14'); }
-  function ghDispatch(id) { return gh('/repos/' + encodeURIComponent(S.repo) + '/actions/workflows/' + id + '/dispatches', 'POST', { ref: S.branch }); }
-  function ghReleases() { return gh('/repos/' + encodeURIComponent(S.repo) + '/releases?per_page=10'); }
-  function ghCreateRelease(tag, name, body) { return gh('/repos/' + encodeURIComponent(S.repo) + '/releases', 'POST', { tag_name: tag, name: name, body: body }); }
-  function ghIssues() { return gh('/repos/' + encodeURIComponent(S.repo) + '/issues?state=all&per_page=12&sort=updated'); }
-  function ghSecrets() { return gh('/repos/' + encodeURIComponent(S.repo) + '/actions/secrets?per_page=100'); }
+  function ghBranches() { return gh('/repos/' + S.repo + '/branches?per_page=100'); }
+  function ghCommits(path) { return gh('/repos/' + S.repo + '/commits?path=' + encodeURIComponent(path) + '&per_page=15'); }
+  function ghWorkflows() { return gh('/repos/' + S.repo + '/actions/workflows'); }
+  function ghRuns() { return gh('/repos/' + S.repo + '/actions/runs?per_page=14'); }
+  function ghDispatch(id) { return gh('/repos/' + S.repo + '/actions/workflows/' + id + '/dispatches', 'POST', { ref: S.branch }); }
+  function ghReleases() { return gh('/repos/' + S.repo + '/releases?per_page=10'); }
+  function ghCreateRelease(tag, name, body) { return gh('/repos/' + S.repo + '/releases', 'POST', { tag_name: tag, name: name, body: body }); }
+  function ghIssues() { return gh('/repos/' + S.repo + '/issues?state=all&per_page=12&sort=updated'); }
+  function ghSecrets() { return gh('/repos/' + S.repo + '/actions/secrets?per_page=100'); }
 
   /* ═══ PA client ═══ */
   function paBase() { return (S.paUrl || window.PA_BASE || '').replace(/\/+$/, ''); }
@@ -8775,7 +8776,7 @@ window.Deploy = (function () {
     var f = ls('deploy_focus', ''); if (!f) f = (window.innerWidth < 760) ? 'gh' : 'split';
     setFocus(f);
     el('dGhTok').value = S.ghTok ? '••••••••' : '';
-    el('dGhRepo').onchange = function () { S.repo = this.value.trim(); S.ghTabs = []; S.ghActive = -1; S.ghCur = null; saveState(); reloadGH(); };
+    el('dGhRepo').onchange = function () { S.repo = normRepo(this.value); S.ghTabs = []; S.ghActive = -1; S.ghCur = null; saveState(); reloadGH(); };
     el('dGhBranch').onchange = function () { S.branch = this.value; saveState(); reloadGH(); };
     el('dPaUrl').onchange = function () { S.paUrl = this.value.trim(); saveState(); reloadPA(); };
     el('dGhTok').onchange = function () { S.ghTok = this.value.trim(); saveState(); if (this.value) this.value = '••••••••'; };
@@ -9055,7 +9056,7 @@ window.Deploy = (function () {
   }
   function importSettings() {
     var inp = document.createElement('input'); inp.type = 'file'; inp.onchange = function () {
-      var f = inp.files[0]; if (!f) return; var rd = new FileReader(); rd.onload = function () { try { var d = JSON.parse(rd.result); S.repo = d.repo || S.repo; S.branch = d.branch || S.branch; S.paUrl = d.paUrl || S.paUrl; if (d.ghTok) S.ghTok = d.ghTok; if (d.paTok) S.paTok = d.paTok; if (d.botTok) S.botTok = d.botTok; saveState(); Modal.close(); Toast.success('✅ Imported'); init(); } catch (e) { Toast.error('❌ bad JSON'); } }; rd.readAsText(f);
+      var f = inp.files[0]; if (!f) return; var rd = new FileReader(); rd.onload = function () { try { var d = JSON.parse(rd.result); S.repo = normRepo(d.repo) || S.repo; S.branch = d.branch || S.branch; S.paUrl = d.paUrl || S.paUrl; if (d.ghTok) S.ghTok = d.ghTok; if (d.paTok) S.paTok = d.paTok; if (d.botTok) S.botTok = d.botTok; saveState(); Modal.close(); Toast.success('✅ Imported'); init(); } catch (e) { Toast.error('❌ bad JSON'); } }; rd.readAsText(f);
     }; inp.click();
   }
   function resetState() { ['deploy_repo', 'deploy_ghtoken', 'deploy_branch', 'deploy_paurl', 'deploy_patoken', 'deploy_bottok'].forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} }); Modal.close(); Toast.info('🧹 State reset'); init(); }
