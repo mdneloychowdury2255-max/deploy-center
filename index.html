@@ -8455,9 +8455,9 @@ window.Deploy = (function () {
   /* ── State persistence ── */
   function normRepo(r) { return (r || '').trim().replace(/\/+$/, '').replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, ''); }
   function loadState() {
-    S.repo = ls('deploy_repo', ''); S.ghTok = ls('deploy_ghtoken', ''); S.branch = ls('deploy_branch', '');
-    S.paUrl = ls('deploy_paurl', (window.PA_BASE || '')); S.paTok = ls('deploy_patoken', ls('pa_token', ''));
-    S.botTok = ls('deploy_bottok', ''); S.auto = ls('deploy_auto', '0') === '1';
+    S.repo = ls('deploy_repo', '').trim(); S.ghTok = ls('deploy_ghtoken', '').trim(); S.branch = ls('deploy_branch', '').trim();
+    S.paUrl = ls('deploy_paurl', (window.PA_BASE || '')).trim(); S.paTok = ls('deploy_patoken', ls('pa_token', '')).trim();
+    S.botTok = ls('deploy_bottok', '').trim(); S.auto = ls('deploy_auto', '0') === '1';
   }
   function saveState() {
     ss('deploy_repo', S.repo); ss('deploy_ghtoken', S.ghTok); ss('deploy_branch', S.branch);
@@ -8468,7 +8468,7 @@ window.Deploy = (function () {
   /* ═══ GitHub client ═══ */
   async function gh(path, method, body) {
     var headers = { 'Accept': 'application/vnd.github+json' };
-    if (S.ghTok) headers['Authorization'] = 'Bearer ' + S.ghTok;
+    if (S.ghTok) headers['Authorization'] = 'Bearer ' + String(S.ghTok).trim();
     var opts = { method: method || 'GET', headers: headers, cache: 'no-cache' };
     if (body) opts.body = JSON.stringify(body);
     var r = await fetch(GH + path, opts);
@@ -8505,7 +8505,7 @@ window.Deploy = (function () {
   async function pa(path, method, body) {
     var base = paBase(); if (!base) throw new Error('PA URL not set');
     var headers = { 'Content-Type': 'application/json' };
-    if (S.paTok) headers['Authorization'] = 'Token ' + S.paTok;
+    if (S.paTok) headers['Authorization'] = 'Token ' + String(S.paTok).trim();
     var opts = { method: method || 'GET', headers: headers, cache: 'no-cache' };
     if (body) opts.body = JSON.stringify(body);
     var r = await fetch(base + path, opts);
@@ -8529,7 +8529,7 @@ window.Deploy = (function () {
     if (!S.botTok) { try { var c = await paConfig(); if (c && c.bot_token) S.botTok = c.bot_token; ss('deploy_bottok', S.botTok); } catch (e) {} }
     if (!S.botTok) throw new Error('Bot token missing (set in Settings)');
     var opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) };
-    var r = await fetch('https://api.telegram.org/bot' + S.botTok + '/' + method, opts);
+    var r = await fetch('https://api.telegram.org/bot' + String(S.botTok).trim() + '/' + method, opts);
     var d = await r.json();
     if (!d.ok) throw new Error('TG ' + d.error_code + ': ' + (d.description || ''));
     return d.result;
