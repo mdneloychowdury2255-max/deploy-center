@@ -2591,18 +2591,51 @@
         function _fmRepo()   { return (localStorage.getItem('deploy_repo') || '').trim() || 'mdneloychowdury2255-max/deploy-center'; }
         function _fmTok()    { return (localStorage.getItem('deploy_ghtoken') || '').trim(); }
         function _fmBranch() { return (localStorage.getItem('deploy_branch') || '').trim() || 'main'; }
+        async function _fmSnap() {
+            try { var r = await fetch('https://raw.githubusercontent.com/' + _fmRepo() + '/' + _fmBranch() + '/_snapshot.json' + (_fmTok() ? ('?token=' + _fmTok()) : '')); if (!r.ok) return null; return await r.json(); } catch (e) { return null; }
+        }
         async function _fmGh(path, method, body) {
             const url = 'https://api.github.com' + path;
             const headers = { 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' };
             const t = _fmTok(); if (t) headers['Authorization'] = 'token ' + t;
             const opts = { method: method || 'GET', headers: headers, cache: 'no-cache' };
             if (body !== undefined) opts.body = JSON.stringify(body);
-            const r = await fetch(url, opts);
-            if (r.status === 404) return null;
-            if (!r.ok) { let m = 'HTTP ' + r.status; try { const e = await r.json(); m = (e && (e.message || e.error)) || m; } catch (e2) {} throw new Error(m); }
-            if (r.status === 204) return {};
-            const ct = r.headers.get('content-type') || '';
-            return ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+            var isGet = (method || 'GET').toUpperCase() === 'GET';
+            var ck = isGet ? ('ghc:' + path) : null;
+            if (ck) { try { var c = JSON.parse(localStorage.getItem(ck) || 'null'); if (c) return c; } catch (e) {} }
+            try {
+                const r = await fetch(url, opts);
+                if (r.status === 404) return null;
+                if (!r.ok) { let m = 'HTTP ' + r.status; try { const e = await r.json(); m = (e && (e.message || e.error)) || m; } catch (e2) {} throw new Error(m); }
+                if (r.status === 204) return {};
+                const ct = r.headers.get('content-type') || '';
+                const data = ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+                if (ck) { try { localStorage.setItem(ck, JSON.stringify(data)); } catch (e) {} }
+                return data;
+            } catch (e) {
+                // Snapshot fallback for rate-limit / offline (contents GET only)
+                if (isGet && path.indexOf('/contents/') >= 0) {
+                    try {
+                        const snap = await _fmSnap();
+                        if (snap && snap.tree) {
+                            var mm = path.match(/\/contents\/?(.*?)(\?|$)/);
+                            var sub = mm ? mm[1].replace(/^\/+/, '') : '';
+                            if (!sub) {
+                                var list = snap.tree.filter(function (tt) { return tt.path.indexOf('/') === -1; }).map(function (tt) { return { name: tt.name, path: tt.path, type: tt.type === 'tree' ? 'dir' : 'file', sha: tt.sha, size: tt.size }; });
+                                if (ck) localStorage.setItem(ck, JSON.stringify(list)); return list;
+                            }
+                            var node = null; for (var i = 0; i < snap.tree.length; i++) { if (snap.tree[i].path === sub) { node = snap.tree[i]; break; } }
+                            if (node && node.type === 'blob') {
+                                try { var raw = await fetch('https://raw.githubusercontent.com/' + _fmRepo() + '/' + _fmBranch() + '/' + encodeURI(sub) + (_fmTok() ? ('?token=' + _fmTok()) : '')); if (raw.ok) { var txt = await raw.text(); var obj = { name: node.name, path: node.path, sha: node.sha, content: _fmEncodeB64(txt), size: txt.length }; if (ck) localStorage.setItem(ck, JSON.stringify(obj)); return obj; } } catch (e2) {}
+                            } else if (node && node.type === 'tree') {
+                                var list2 = snap.tree.filter(function (tt) { return tt.path !== sub && tt.path.indexOf(sub + '/') === 0 && tt.path.substring(sub.length + 1).indexOf('/') === -1; }).map(function (tt) { return { name: tt.name, path: tt.path, type: tt.type === 'tree' ? 'dir' : 'file', sha: tt.sha, size: tt.size }; });
+                                if (ck) localStorage.setItem(ck, JSON.stringify(list2)); return list2;
+                            }
+                        }
+                    } catch (e2) {}
+                }
+                throw e;
+            }
         }
         function _fmDecodeB64(b64) { try { return decodeURIComponent(escape(atob((b64 || '').replace(/\s/g, '')))); } catch (e) { try { return atob((b64 || '').replace(/\s/g, '')); } catch (e2) { return ''; } } }
         function _fmEncodeB64(str) { return btoa(unescape(encodeURIComponent(str))); }
@@ -2666,6 +2699,45 @@
         async function ghFetch(method, endpoint, body) {
             return paFetch(method, endpoint, body);
         }
+
+        // ── Intercept dead PythonAnywhere (/api/pa/*) → GitHub API ──
+        // PA web app was deleted; route every PA call to the GitHub repo so the
+        // PA (Telegram bot) pane keeps working. Server-only ops no-op safely.
+        function _paCacheSet(k, v) { try { localStorage.setItem('pac:' + k, JSON.stringify({ t: Date.now(), d: v })); } catch (e) {} }
+        function _paCacheGet(k) { try { var s = localStorage.getItem('pac:' + k); if (!s) return null; return JSON.parse(s).d; } catch (e) { return null; } }
+        function _paListFromSnap(p) {
+          var snap = _paCacheGet('__snap'); if (!snap || !snap.tree) return null;
+          var prefix = p ? p + '/' : '';
+          return snap.tree.filter(function (t) {
+            if (t.path === p) return false;
+            if (t.path.indexOf(prefix) !== 0) return false;
+            var rest = t.path.substring(prefix.length);
+            return rest.indexOf('/') === -1;
+          }).map(function (t) { return { name: t.name, path: t.path, type: (t.type === 'tree' ? 'dir' : 'file'), sha: t.sha, size: t.size || 0 }; });
+        }
+        async function _paToGh(url, init) {
+          init = init || {}; var method = (init.method || 'GET').toUpperCase();
+          var u = new URL(url, location.href); var qp = u.searchParams;
+          var p = (qp.get('path') || '').replace(/^\/+/, '');
+          try {
+            if (u.pathname.indexOf('/info') >= 0) return new Response(JSON.stringify({ ok: true, mode: 'github', platform: 'GitHub', python: 'n/a', host: 'github.com', repo: _fmRepo(), branch: _fmBranch() }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            if (u.pathname.indexOf('/reload') >= 0 || u.pathname.indexOf('/apply') >= 0 || u.pathname.indexOf('/backup') >= 0 || u.pathname.indexOf('/restore') >= 0) return new Response(JSON.stringify({ ok: true, note: 'GitHub-backed: no server reload needed' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            if (u.pathname.indexOf('/raw') >= 0) return new Response(null, { status: 302, headers: { 'Location': 'https://raw.githubusercontent.com/' + _fmRepo() + '/' + _fmBranch() + '/' + encodeURI(p) + (_fmTok() ? ('?token=' + _fmTok()) : '') } });
+            if (u.pathname.indexOf('/list') >= 0) {
+              try { var d = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : '')); var arr = Array.isArray(d) ? d : [d]; var norm = arr.filter(function (it) { return it.name !== '.gitkeep' && it.name !== '.nojekyll'; }).map(function (it) { return { name: it.name, path: it.path, type: it.type === 'dir' ? 'dir' : 'file', sha: it.sha, size: it.size }; }); _paCacheSet('list:' + p, norm); return new Response(JSON.stringify(norm), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+              catch (e) { var c = _paCacheGet('list:' + p); if (c) return new Response(JSON.stringify(c), { status: 200, headers: { 'Content-Type': 'application/json' } }); try { _paCacheSet('__snap', await _fmSnap()); } catch (e2) {} var s = _paListFromSnap(p); if (s) return new Response(JSON.stringify(s), { status: 200, headers: { 'Content-Type': 'application/json' } }); throw e; }
+            }
+            if (u.pathname.indexOf('/read') >= 0) {
+              try { var d2 = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : '')); return new Response(JSON.stringify({ content: d2.content, sha: d2.sha, name: d2.name, path: d2.path, size: d2.size }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+              catch (e) { try { var raw = await fetch('https://raw.githubusercontent.com/' + _fmRepo() + '/' + _fmBranch() + '/' + encodeURI(p) + (_fmTok() ? ('?token=' + _fmTok()) : '')); if (raw.ok) { var txt = await raw.text(); return new Response(JSON.stringify({ content: _fmEncodeB64(txt), sha: 'snapshot', name: p.split('/').pop(), path: p, size: txt.length }), { status: 200, headers: { 'Content-Type': 'application/json' } }); } } catch (e2) {} throw e; }
+            }
+            if (u.pathname.indexOf('/write') >= 0) { var b = JSON.parse((init.body || '{}') || '{}'); var p2 = (b.path || '').replace(/^\/+/, ''); return new Response(JSON.stringify(await _fmGh('/repos/' + _fmRepo() + '/contents/' + p2, 'PUT', { message: b.message || ('Update ' + p2), content: b.content || '', branch: _fmBranch() })), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+            if (u.pathname.indexOf('/delete') >= 0) { var b2 = JSON.parse((init.body || '{}') || '{}'); var p3 = (b2.path || '').replace(/^\/+/, ''); return new Response(JSON.stringify(await _fmGh('/repos/' + _fmRepo() + '/contents/' + p3, 'DELETE', { message: 'Delete ' + p3, sha: b2.sha, branch: _fmBranch() })), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+            if (u.pathname.indexOf('/rename') >= 0) { var b3 = JSON.parse((init.body || '{}') || '{}'); var from = (b3.from || '').replace(/^\/+/, ''); var to = (b3.to || '').replace(/^\/+/, ''); var d3 = await _fmGh('/repos/' + _fmRepo() + '/contents/' + from + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : '')); var b64 = (d3.content || '').replace(/\s/g, ''); await _fmGh('/repos/' + _fmRepo() + '/contents/' + to, 'PUT', { message: 'Rename ' + from + ' → ' + to, content: b64, branch: _fmBranch() }); await _fmGh('/repos/' + _fmRepo() + '/contents/' + from, 'DELETE', { message: 'Delete ' + from, sha: d3.sha, branch: _fmBranch() }); return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+            return new Response('Not found', { status: 404 });
+          } catch (e) { return new Response(JSON.stringify({ error: e.message }), { status: 502, headers: { 'Content-Type': 'application/json' } }); }
+        }
+        (function () { var _orig = window.fetch.bind(window); window.fetch = async function (input, init) { var url = (typeof input === 'string') ? input : (input && input.url) || ''; if (url && url.indexOf('/api/pa/') !== -1) { return await _paToGh(url, init); } return _orig(input, init); }; })();
 
         // ═══════════════════════════════════════════════════════
         //  FILE ICON MAPPER
@@ -8356,10 +8428,15 @@ window.Deploy = (function () {
     if (S.ghTok) headers['Authorization'] = 'Bearer ' + String(S.ghTok).trim();
     var opts = { method: method || 'GET', headers: headers, cache: 'no-cache' };
     if (body) opts.body = JSON.stringify(body);
-    var r = await fetch(GH + path, opts);
+    var isGet = (method || 'GET').toUpperCase() === 'GET';
+    var ck = isGet ? ('ghp:' + path) : null;
+    if (ck) { try { var c = JSON.parse(localStorage.getItem(ck) || 'null'); if (c) return c; } catch (e) {} }
+    var r = await fetch('https://api.github.com' + path, opts);
     if (!r.ok) { var t = ''; try { t = await r.text(); } catch (e) {} throw new Error('GitHub ' + r.status + ': ' + t.slice(0, 220)); }
     var ct = r.headers.get('content-type') || '';
-    return ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+    var data = ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+    if (ck) { try { localStorage.setItem(ck, JSON.stringify(data)); } catch (e) {} }
+    return data;
   }
   function ghRepoInfo() { return gh('/repos/' + S.repo); }
   function ghContents(path) {
