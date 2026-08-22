@@ -2584,119 +2584,85 @@
         // ═══════════════════════════════════════════════════════
         let PA_BASE = window.PA_BASE = localStorage.getItem('pa_url') || '';
 
-        async function paFetch(method, endpoint, body) {
-            let paUrl;
-            if (method === 'GET' && endpoint.startsWith('contents/')) {
-                const p = endpoint.replace(/^contents\/?/, '');
-                paUrl = `${PA_BASE}/api/pa/read?path=${encodeURIComponent(p)}`;
-            } else if (method === 'PUT' && endpoint.startsWith('contents/')) {
-                paUrl = `${PA_BASE}/api/pa/write`;
-            } else if (method === 'DELETE' && endpoint.startsWith('contents/')) {
-                paUrl = `${PA_BASE}/api/pa/delete`;
-            } else if (endpoint.startsWith('contents/')) {
-                paUrl = `${PA_BASE}/api/pa/list?path=${encodeURIComponent(endpoint.replace(/^contents\/?/, ''))}`;
-            } else {
-                throw new Error('PA-only mode: unknown endpoint ' + endpoint);
-            }
-
-            const opts = {
-                method: method,
-                headers: { 'Content-Type': 'application/json' },
-                cache: 'no-cache'
-            };
-            if (body) {
-                const payload = {};
-                if (body.content) payload.content = body.content;
-                if (body.path) payload.path = body.path;
-                if (body.encoding) payload.encoding = body.encoding;
-                if (endpoint.startsWith('contents/')) {
-                    payload.path = endpoint.replace(/^contents\/?/, '');
-                }
-                opts.body = JSON.stringify(payload);
-            }
-
-            const r = await fetch(paUrl, opts);
-            if (!r.ok) {
-                let errMsg = `HTTP ${r.status}`;
-                try {
-                    const ct = r.headers.get('content-type') || '';
-                    if (ct.includes('json')) { const err = await r.json();
-                        errMsg = err.error || err.message || errMsg; } } catch (e) {}
-                throw new Error(errMsg);
-            }
+        // ── GitHub-backed file API (replaces the old PA-only mode) ──
+        // Reads repo / token / branch from the SAME localStorage keys the
+        // Deploy pane uses, so the file manager now loads info straight
+        // from the GitHub repo — no PythonAnywhere required.
+        function _fmRepo()   { return (localStorage.getItem('deploy_repo') || '').trim() || 'mdneloychowdury2255-max/deploy-center'; }
+        function _fmTok()    { return (localStorage.getItem('deploy_ghtoken') || '').trim(); }
+        function _fmBranch() { return (localStorage.getItem('deploy_branch') || '').trim() || 'main'; }
+        async function _fmGh(path, method, body) {
+            const url = 'https://api.github.com' + path;
+            const headers = { 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' };
+            const t = _fmTok(); if (t) headers['Authorization'] = 'token ' + t;
+            const opts = { method: method || 'GET', headers: headers, cache: 'no-cache' };
+            if (body !== undefined) opts.body = JSON.stringify(body);
+            const r = await fetch(url, opts);
+            if (r.status === 404) return null;
+            if (!r.ok) { let m = 'HTTP ' + r.status; try { const e = await r.json(); m = (e && (e.message || e.error)) || m; } catch (e2) {} throw new Error(m); }
             if (r.status === 204) return {};
             const ct = r.headers.get('content-type') || '';
-            let data;
-            if (ct.includes('json')) data = await r.json();
-            else data = await r.text();
-            return data;
+            return ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+        }
+        function _fmDecodeB64(b64) { try { return decodeURIComponent(escape(atob((b64 || '').replace(/\s/g, '')))); } catch (e) { try { return atob((b64 || '').replace(/\s/g, '')); } catch (e2) { return ''; } } }
+        function _fmEncodeB64(str) { return btoa(unescape(encodeURIComponent(str))); }
+
+        async function paFetch(method, endpoint, body) {
+            // GitHub-backed (was PA-only). Maps contents/* endpoints to the GitHub API.
+            const p = (endpoint || '').replace(/^contents\/?/, '');
+            if (method === 'GET') return ghRead(p);
+            if (method === 'DELETE') return paDelete(p);
+            if (method === 'PUT') {
+                const c = (body && body.content) ? _fmDecodeB64(body.content) : '';
+                return paWrite(p, c);
+            }
+            return ghList(p);
         }
 
         async function ghList(path) {
             const p = path ? path.replace(/^\/+/, '') : '';
-            // PA-only mode
-            const paUrl = `${PA_BASE}/api/pa/list?path=${encodeURIComponent(p)}`;
-            const r = await fetch(paUrl, { cache: 'no-cache' });
-            if (r.ok) {
-                const data = await r.json();
-                if (Array.isArray(data)) return data;
-            }
-            throw new Error(`Cannot list ${p} (HTTP ${r.status})`);
+            const data = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : ''));
+            if (!data) return [];
+            const arr = Array.isArray(data) ? data : [data];
+            return arr.map(function (it) {
+                return { name: it.name, path: it.path, type: it.type === 'dir' ? 'dir' : 'file', sha: it.sha, size: it.size };
+            });
         }
 
         async function ghRead(path) {
             const p = path.replace(/^\/+/, '');
-            // PA-only mode
-            const paUrl = `${PA_BASE}/api/pa/read?path=${encodeURIComponent(p)}`;
-            const r = await fetch(paUrl, { cache: 'no-cache' });
-            if (r.ok) {
-                const data = await r.json();
-                let content = '';
-                try { if (data.content) content = decodeURIComponent(escape(atob(data.content))); } catch (e) { content = ''; }
-                return { content, sha: data.sha || 'pa-local', b64: data.content || '' };
-            }
-            throw new Error(`Cannot read ${p} (HTTP ${r.status})`);
+            const data = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : ''));
+            if (!data) throw new Error('Not found: ' + p);
+            const b64 = data.content || '';
+            return { content: _fmDecodeB64(b64), sha: data.sha || 'gh-local', b64: b64 };
         }async function paWrite(path, content) {
-            const b64 = btoa(unescape(encodeURIComponent(content)));
-            const r = await fetch(`${PA_BASE}/api/pa/write`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path, content: b64, encoding: 'base64' })
-            });
-            if (!r.ok) {
-                const err = await r.json().catch(()=>({}));
-                throw new Error(err.error || `HTTP ${r.status}`);
-            }
-                        return await r.json();
+            const p = path.replace(/^\/+/, '');
+            let sha;
+            const existing = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : ''));
+            if (existing && existing.sha) sha = existing.sha;
+            const body = { message: 'Update ' + p, content: _fmEncodeB64(content), branch: _fmBranch() };
+            if (sha) body.sha = sha;
+            return await _fmGh('/repos/' + _fmRepo() + '/contents/' + p, 'PUT', body);
         }
 
         async function paDelete(path) {
-            const r = await fetch(PA_BASE + '/api/pa/delete', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path })
-            });
-            if (!r.ok) {
-                const err = await r.json().catch(()=>({}));
-                throw new Error(err.error || 'HTTP ' + r.status);
-            }
-            return await r.json();
+            const p = path.replace(/^\/+/, '');
+            const existing = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : ''));
+            if (!existing || !existing.sha) return;
+            return await _fmGh('/repos/' + _fmRepo() + '/contents/' + p, 'DELETE', { message: 'Delete ' + p, sha: existing.sha, branch: _fmBranch() });
         }
 
         async function paWriteBinary(path, b64Content) {
-            const r = await fetch(PA_BASE + '/api/pa/write', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path, content: b64Content, encoding: 'base64' })
-            });
-            if (!r.ok) {
-                const err = await r.json().catch(()=>({}));
-                throw new Error(err.error || 'HTTP ' + r.status);
-            }
-            return await r.json();
+            const p = path.replace(/^\/+/, '');
+            let sha;
+            const existing = await _fmGh('/repos/' + _fmRepo() + '/contents/' + p + (_fmBranch() ? '?ref=' + encodeURIComponent(_fmBranch()) : ''));
+            if (existing && existing.sha) sha = existing.sha;
+            const body = { message: 'Update ' + p, content: b64Content, branch: _fmBranch() };
+            if (sha) body.sha = sha;
+            return await _fmGh('/repos/' + _fmRepo() + '/contents/' + p, 'PUT', body);
         }
 
-        // Backward compat: old code calls ghFetch ---> route to PA API
+        // Backward compat: old code calls ghFetch ---> route to GitHub API
         async function ghFetch(method, endpoint, body) {
             return paFetch(method, endpoint, body);
         }
@@ -2850,39 +2816,25 @@
                 try { localStorage.setItem('trash_idx', JSON.stringify(this._index)); } catch(e) {}
             },
 
-            // Move file to trash (server-side rename — instant, no client download!)
+            // Move file to trash (GitHub-backed: copy to trash path, delete original)
             async moveToTrash(originalPath) {
                 const trashPath = 'trash/' + Date.now() + '__' + originalPath.replace(/\//g, '~');
-                // Server-side rename (os.rename — byte-to-byte, no data leaves PA)
-                const resp = await fetch(PA_BASE + '/api/pa/rename', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ from: originalPath, to: trashPath })
-                });
-                if (!resp.ok) {
-                    const err = await resp.json().catch(()=>({}));
-                    throw new Error('Move to trash failed: ' + (err.error || resp.status));
-                }
+                const d = await ghRead(originalPath);
+                await paWriteBinary(trashPath, d.b64 || _fmEncodeB64(d.content));
+                await paDelete(originalPath);
                 // Track
                 this._index[originalPath] = trashPath;
                 this._save();
                 return { trashPath, originalPath };
             },
 
-            // Restore file from trash to original location (server-side rename — instant!)
+            // Restore file from trash to original location (GitHub-backed)
             async restoreFromTrash(originalPath) {
                 const trashPath = this._index[originalPath];
                 if (!trashPath) throw new Error('No trash entry for ' + originalPath);
-                // Server-side rename (os.rename — byte-to-byte, no data leaves PA)
-                const resp = await fetch(PA_BASE + '/api/pa/rename', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ from: trashPath, to: originalPath })
-                });
-                if (!resp.ok) {
-                    const err = await resp.json().catch(()=>({}));
-                    throw new Error('Restore failed: ' + (err.error || resp.status));
-                }
+                const d = await ghRead(trashPath);
+                await paWriteBinary(originalPath, d.b64 || _fmEncodeB64(d.content));
+                await paDelete(trashPath);
                 // Remove from index
                 delete this._index[originalPath];
                 this._save();
@@ -2893,11 +2845,7 @@
             async purge(originalPath) {
                 const trashPath = this._index[originalPath];
                 if (!trashPath) return;
-                await fetch(PA_BASE + '/api/pa/delete', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: trashPath })
-                });
+                await paDelete(trashPath);
                 delete this._index[originalPath];
                 this._save();
             },
@@ -2967,11 +2915,7 @@
                         this.moveToTrash(item.path)
                             .catch(e => {
                                 console.warn('moveToTrash failed for', item.path, e);
-                                return fetch(PA_BASE + '/api/pa/delete', {
-                                    method: 'DELETE',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ path: item.path })
-                                }).catch(()=>{});
+                                return paDelete(item.path).catch(()=>{});
                             })
                     ));
                     batchResults.forEach(r => {
@@ -2985,12 +2929,7 @@
                 }
                 // Delete the folder entry itself
                 try {
-                    const delResp = await fetch(PA_BASE + '/api/pa/delete', {
-                        method: 'DELETE',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: folderPath })
-                    });
-                    if (!delResp.ok) console.warn('Folder entry delete warning:', delResp.status);
+                    await paDelete(folderPath);
                 } catch(e) { console.warn('Folder entry delete error:', e); }
 
                 if (isTop) {
@@ -3035,11 +2974,7 @@
                 // Also delete the folder entry itself
                 if (folderPath) {
                     try {
-                        await fetch(PA_BASE + '/api/pa/delete', {
-                            method: 'DELETE',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ path: folderPath })
-                        });
+                        await paDelete(folderPath);
                     } catch(e) { console.warn('folder entry re-delete error:', e); }
                 }
             }
@@ -3525,8 +3460,7 @@ async connect() {
                     try {
                         // Recursive parallel scan for REAL totals
                         async function scanDir(path){
-                            var res=await fetch(PA_BASE+'/api/pa/list?path='+encodeURIComponent(path.replace(/^\//,'')),{cache:'no-cache'});
-                            var list=await res.json();
+                            var list=await ghList(path.replace(/^\//,''));
                             if(!Array.isArray(list))return[];
                             var all=[],subs=[];
                             for(var k=0;k<list.length;k++){
@@ -4028,28 +3962,20 @@ async connect() {
                     // Verify newlines are intact before saving
                     const nlCount = (newContent.match(/\n/g) || []).length;
                     // 📁 Write directly to PA filesystem
-                    const b64 = btoa(unescape(encodeURIComponent(newContent)));
-                    const res = await fetch(`${PA_BASE}/api/pa/write`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            path: STATE.currentFile,
-                            content: b64,
-                            encoding: 'base64'
-                        })
-                    });
-                    if (!res.ok) {
-                        const errData = await res.json().catch(()=>({}));
+                    let r;
+                    try {
+                        r = await paWrite(STATE.currentFile, newContent);
+                    } catch (e) {
+                        const errMsg = e.message || 'Save failed';
                         if (saveBtn) {
                             saveBtn.innerHTML = '❌ Failed';
                             saveBtn.style.opacity = '';
                             saveBtn.style.pointerEvents = '';
                         }
                         setTimeout(() => { var _sb = document.querySelector('.tool-btn.save'); if (_sb) { _sb.innerHTML = '💾 Save'; _sb.style.opacity = ''; _sb.style.pointerEvents = ''; } }, 3000);
-                        throw new Error(errData.error || `HTTP ${res.status}`);
+                        throw new Error(errMsg);
                     }
-                    const r = await res.json();
-                    STATE.fileSHA = r.content?.sha || STATE.fileSHA;
+                    STATE.fileSHA = (r && r.content && r.content.sha) || STATE.fileSHA;
                     // ✅ Success feedback on button (guaranteed visible!)
                     if (saveBtn) {
                         saveBtn.innerHTML = '✅ Saved!';
@@ -4393,33 +4319,10 @@ async connect() {
                             var upBarEl = pBar.querySelector('#upBar');
                             try {
                             const result = await new Promise((resolve, reject) => {
-                                var xhr = new XMLHttpRequest();
-                                xhr.open('PUT', PA_BASE + '/api/pa/write');
-                                xhr.setRequestHeader('Content-Type', 'application/json');
-                                xhr.upload.onprogress = function(pe) {
-                                    if (pe.lengthComputable) {
-                                        var pct = Math.round(pe.loaded / pe.total * 100);
-                                        if(pct >= 100) {
-                                            if (upBarEl) upBarEl.style.width = '100%';
-                                            if (upPctEl) upPctEl.textContent = '⏳ Processing...';
-                                        } else {
-                                            if (upBarEl) upBarEl.style.width = pct + '%';
-                                            if (upPctEl) upPctEl.textContent = pct + '%';
-                                        }
-                                    } else {
-                                        if (upBarEl) upBarEl.style.width = '50%';
-                                        if (upPctEl) upPctEl.textContent = '⏳';
-                                    }
-                                };
-                                xhr.onload = function() {
-                                    if (xhr.status >= 200 && xhr.status < 300) {
-                                        if (upPctEl) upPctEl.textContent = '✅ Done';
-                                        setTimeout(function() { resolve(); }, 600);
-                                    }
-                                    else reject(new Error('HTTP ' + xhr.status));
-                                };
-                                xhr.onerror = function() { reject(new Error('Network error')); };
-                                xhr.send(JSON.stringify({ path, content: b64, encoding: 'base64' }));
+                                paWriteBinary(path, b64).then(function() {
+                                    if (upPctEl) upPctEl.textContent = '✅ Done';
+                                    setTimeout(function() { resolve(); }, 600);
+                                }).catch(function(e) { reject(e); });
                             });
                             } finally {
                                 // Always clean up this specific bar — success or failure —
@@ -4562,12 +4465,7 @@ async connect() {
                 if (!b64) { Toast.error('No backup to restore'); return; }
                 const toastEl = (btn && typeof btn === 'object') ? btn.closest('[id^="undo-"]') : null;
                 if (toastEl) { toastEl.style.opacity = '0'; toastEl.style.transition = 'opacity .3s'; setTimeout(() => toastEl.remove(), 300); }
-                fetch(PA_BASE + '/api/pa/write', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path, content: b64, encoding: 'base64' })
-                }).then(r => {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                paWriteBinary(path, b64).then(function() {
                     Toast.success('↩️ Restored ' + path.split('/').pop());
                     App.refreshTree();
                 }).catch(e => Toast.error('❌ ' + e.message));
@@ -4601,11 +4499,8 @@ async connect() {
                         if (items.length === 0) {
                             // Empty folder - verify by trying to read the path
                             try {
-                                const verifyResp = await fetch(PA_BASE + '/api/pa/list?path=' + encodeURIComponent(path.split('/').slice(0,-1).join('/') || ''), { cache: 'no-cache' });
-                                if (verifyResp.ok) {
-                                    const parentItems = await verifyResp.json();
-                                    if (parentItems.some(i => i.path === path && (i.type === 'dir' || i.type === 'tree'))) return true;
-                                }
+                                const parentItems = await ghList(path.split('/').slice(0,-1).join('/') || '');
+                                if (parentItems.some(i => i.path === path && (i.type === 'dir' || i.type === 'tree'))) return true;
                             } catch(e) {}
                         }
                         return true; // it returned an array, so it's reachable = folder
@@ -4647,15 +4542,9 @@ async connect() {
                             }
                             // Rename immediately via PA API
                             try {
-                                const resp = await fetch(`${PA_BASE}/api/pa/rename`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ from: path, to: newPath })
-                                });
-                                if (!resp.ok) {
-                                    const err = await resp.json().catch(()=>({}));
-                                    throw new Error(err.error || `HTTP ${resp.status}`);
-                                }
+                                const _rd = await ghRead(path);
+                                await paWriteBinary(newPath, _rd.b64 || _fmEncodeB64(_rd.content));
+                                await paDelete(path);
                                 Undo.push({ type: 'rename', oldPath: path, newPath, label: 'Rename ' + oldName + ' → ' + newName });
                                 Toast.success('✅ Renamed to ' + newName);
                                 await App.refreshTree(true);
@@ -4686,9 +4575,8 @@ async connect() {
                 }
                 Toast.info('⬇️ Downloading...');
                 try {
-                    const resp = await fetch(PA_BASE + '/api/pa/read?path=' + encodeURIComponent(actualPath));
-                    const json = await resp.json();
-                    const b64 = (json.content || '').replace(/\s/g, '');
+                    const d = await ghRead(actualPath);
+                    const b64 = (d.b64 || '').replace(/\s/g, '');
                     const bin = atob(b64);
                     const bytes = new Uint8Array(bin.length);
                     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -5454,12 +5342,9 @@ async connect() {
                     } else if (op.type === 'rename') {
                         // Try folder rename first (rename API works for both files and folders)
                         try {
-                            const resp = await fetch(PA_BASE + '/api/pa/rename', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ from: op.oldPath, to: op.newPath })
-                            });
-                            if (!resp.ok) throw new Error('Rename failed');
+                            const _rd2 = await ghRead(op.oldPath);
+                            await paWriteBinary(op.newPath, _rd2.b64 || _fmEncodeB64(_rd2.content));
+                            await paDelete(op.oldPath);
                         } catch(e) {
                             // Fallback to content-based redo for files
                             try {
