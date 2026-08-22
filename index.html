@@ -8423,6 +8423,21 @@ window.Deploy = (function () {
   }
 
   /* ═══ GitHub client ═══ */
+  async function _ghSnapFallback(path) {
+    try {
+      var r = await fetch('https://raw.githubusercontent.com/' + S.repo + '/' + (S.branch || 'main') + '/_snapshot.json' + (S.ghTok ? ('?token=' + S.ghTok) : ''));
+      if (!r.ok) return null; var snap = await r.json(); if (!snap || !snap.tree) return null;
+      var mm = path.match(/\/contents\/?(.*?)(\?|$)/); var sub = mm ? mm[1].replace(/^\/+/, '') : '';
+      if (!sub) return snap.tree.filter(function (t) { return t.path.indexOf('/') === -1; }).map(function (t) { return { name: t.name, path: t.path, type: t.type === 'tree' ? 'dir' : 'file', sha: t.sha, size: t.size }; });
+      var node = null; for (var i = 0; i < snap.tree.length; i++) { if (snap.tree[i].path === sub) { node = snap.tree[i]; break; } }
+      if (node && node.type === 'blob') {
+        try { var raw = await fetch('https://raw.githubusercontent.com/' + S.repo + '/' + (S.branch || 'main') + '/' + encodeURI(sub) + (S.ghTok ? ('?token=' + S.ghTok) : '')); if (raw.ok) { var txt = await raw.text(); return { name: node.name, path: node.path, sha: node.sha, content: btoa(unescape(encodeURIComponent(txt))), size: txt.length }; } } catch (e2) {}
+      } else if (node && node.type === 'tree') {
+        return snap.tree.filter(function (t) { return t.path !== sub && t.path.indexOf(sub + '/') === 0 && t.path.substring(sub.length + 1).indexOf('/') === -1; }).map(function (t) { return { name: t.name, path: t.path, type: t.type === 'tree' ? 'dir' : 'file', sha: t.sha, size: t.size }; });
+      }
+    } catch (e) {}
+    return null;
+  }
   async function gh(path, method, body) {
     var headers = { 'Accept': 'application/vnd.github+json' };
     if (S.ghTok) headers['Authorization'] = 'Bearer ' + String(S.ghTok).trim();
@@ -8431,12 +8446,17 @@ window.Deploy = (function () {
     var isGet = (method || 'GET').toUpperCase() === 'GET';
     var ck = isGet ? ('ghp:' + path) : null;
     if (ck) { try { var c = JSON.parse(localStorage.getItem(ck) || 'null'); if (c) return c; } catch (e) {} }
-    var r = await fetch('https://api.github.com' + path, opts);
-    if (!r.ok) { var t = ''; try { t = await r.text(); } catch (e) {} throw new Error('GitHub ' + r.status + ': ' + t.slice(0, 220)); }
-    var ct = r.headers.get('content-type') || '';
-    var data = ct.indexOf('json') >= 0 ? await r.json() : await r.text();
-    if (ck) { try { localStorage.setItem(ck, JSON.stringify(data)); } catch (e) {} }
-    return data;
+    try {
+      var r = await fetch('https://api.github.com' + path, opts);
+      if (!r.ok) { var t = ''; try { t = await r.text(); } catch (e) {} throw new Error('GitHub ' + r.status + ': ' + t.slice(0, 220)); }
+      var ct = r.headers.get('content-type') || '';
+      var data = ct.indexOf('json') >= 0 ? await r.json() : await r.text();
+      if (ck) { try { localStorage.setItem(ck, JSON.stringify(data)); } catch (e) {} }
+      return data;
+    } catch (e) {
+      if (isGet && path.indexOf('/contents/') >= 0) { var fb = await _ghSnapFallback(path); if (fb) { if (ck) { try { localStorage.setItem(ck, JSON.stringify(fb)); } catch (e2) {} } return fb; } }
+      throw e;
+    }
   }
   function ghRepoInfo() { return gh('/repos/' + S.repo); }
   function ghContents(path) {
