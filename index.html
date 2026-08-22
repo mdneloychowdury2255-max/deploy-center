@@ -8770,6 +8770,7 @@ window.Deploy = (function () {
   /* ═══ Init ═══ */
   function init() {
     injectCss(); loadState();
+    if (location.hostname.indexOf('github.io') >= 0 && !S.repo) { S.repo = 'mdneloychowdury2255-max/deploy-center'; if (!S.branch) S.branch = 'main'; saveState(); }
     var p = el('panel-deploy'); if (!p) return;
     if (!p.dataset.built) { p.innerHTML = SHELL; p.dataset.built = '1'; wireDivider(); wireKeys(); }
     el('dGhRepo').value = S.repo; el('dGhBranch').value = S.branch; el('dPaUrl').value = S.paUrl;
@@ -8809,7 +8810,7 @@ window.Deploy = (function () {
           runs.map(function (r) { var cls = r.conclusion === 'success' ? 'ok' : (r.conclusion === 'failure' ? 'fail' : 'run'); return '<div class="deploy-run"><span class="st ' + cls + '">' + esc(r.conclusion || r.status) + '</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.name || r.head_branch || 'run') + '</span><a class="deploy-pill" href="' + esc(r.html_url || '#') + '" target="_blank" onclick="event.stopPropagation()">↗</a></div>'; }).join('') || '<div class="deploy-empty">No runs yet</div>';
       } catch (e) { info.innerHTML = '<div class="deploy-empty">runs: ' + esc(e.message) + '</div>'; }
       setDot('dGhDot', true);
-    } catch (e) { tree.innerHTML = '<div class="deploy-empty">❌ ' + esc(e.message) + '</div>'; setDot('dGhDot', false); log('GH: ' + e.message, 'e'); }
+    } catch (e) { var m = e.message || ''; var ghint = (m.indexOf('401')>=0||m.indexOf('403')>=0||m.indexOf('404')>=0) ? '<br><span style="font-size:11px;color:var(--text-muted)">Private repo? Add a GitHub token in ⚙️ Settings (top-right).</span>' : ''; tree.innerHTML = '<div class="deploy-empty">❌ ' + esc(m) + ghint + '</div>'; setDot('dGhDot', false); log('GH: ' + m, 'e'); }
     finally { busy('gh', false); }
   }
   async function loadBranches() {
@@ -9106,9 +9107,12 @@ window.Deploy = (function () {
 <script>
 /* skip the PA login gate on GitHub Pages (no PA backend here) */
 (function(){
-  var ls=document.getElementById('loginScreen'); if(ls){ ls.style.display='none'; }
-  var app=document.getElementById('app'); if(app){ app.style.display='flex'; app.classList.add('active'); }
-  var dv=document.querySelector('[data-view="deploy"]'); if(dv){ dv.click(); }
+  function boot(){
+    var ls=document.getElementById('loginScreen'); if(ls){ ls.style.display='none'; }
+    var app=document.getElementById('app'); if(app){ app.style.display='flex'; app.classList.add('active'); }
+    var dv=document.querySelector('[data-view="deploy"]'); if(dv){ dv.click(); }
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot); else boot();
 })();
 </script>
 </body>
